@@ -1,12 +1,98 @@
 #!/usr/bin/env python3
 
+from concurrent.futures import thread
 import socket
+from symtable import SymbolTable
 import sys
+import threading
+from enum import Enum
 
 HOST = '127.0.0.1'
 port = None
 
+class ServerThread(threading.Thread):
 
+    class Authentication():
+        class AuthenticationPhase(Enum):
+            USERNAME = 0
+            KEY_ID = 1
+            CONFIRMATION = 2
+            AUTHENTICATED = 3
+
+        SERVER_KEY = [23019, 32037, 18789, 16443, 18189]
+        
+
+        def __init__(self, connection) -> None:
+            self.connection = connection
+            self.phase = self.AuthenticationPhase.USERNAME
+
+        def check_if_length_valid(self, data) -> bool:
+            if self.phase == self.AuthenticationPhase.USERNAME:
+                if len(data) > 18:
+                    return False
+            elif self.phase == self.AuthenticationPhase.KEY_ID:
+                if len(data) > 3:
+                    return False
+            elif self.phase == self.AuthenticationPhase.CONFIRMATION:
+                if len(data) > 5:
+                    return False
+            return True
+
+        def authenticate(self, data) -> bool:
+            if not self.check_if_length_valid(data):
+                self.connection.send(b"301 SYNTAX ERROR\a\b")
+                return False
+
+            if self.phase == self.AuthenticationPhase.USERNAME:
+                self.username = data
+                self.phase = self.AuthenticationPhase.KEY_ID
+
+                self.connection.send(b"107 KEY REQUEST\a\b")
+                return True
+
+            elif self.phase == self.AuthenticationPhase.KEY_ID:
+                if not data.isdecimal():
+                    self.connection.send(b"301 SYNTAX ERROR\a\b")
+                    return False
+
+                self.keyid = int(data)
+
+                if self.keyid < 0 or self.keyid > 4:
+                    self.connection.send(b"3303 KEY OUT OF RANGE\a\b")
+                    return False
+
+                self.connection.send(b"107 KEY REQUEST\a\b")
+                return True
+
+            elif self.phase == self.AuthenticationPhase.AUTHENTICATED:
+                
+
+    def __init__(self, connection, address) -> None:
+        threading.Thread.__init__(self)
+        self.connection = connection
+        self.address = address
+        self.data = ""
+        self.authentication = ServerThread.Authentication(connection)
+        print("OK: Connected from ", address)
+
+    def run(self):
+        while True:
+            self.data += self.connection.recv(100).decode("ascii")
+            while '-' in self.data:
+                new_partition = self.recv_data.partition("-")
+                new_string = new_partition[0]
+                self.data = new_partition[2]
+                print(new_string)
+                if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
+                    if not self.autentication.authenticate(new_string):
+                        break
+
+            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED and self.authentication.check_if_length_valid(self.data)):
+                self.connection.send(b"301 SYNTAX ERROR\a\b")
+                break
+
+
+        
 def get_port() -> bool:
     if (len(sys.argv) <= 1):
         print("ERR: Add port as an argument")
@@ -30,7 +116,7 @@ def main():
         return None
     
     try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        serversocket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         print("OK: Socket created")
     except:
         print("ERR: Socket creation failed")
@@ -39,10 +125,23 @@ def main():
     try:
         global HOST
         global port
-        s.bind((HOST, port))
+        serversocket.bind((HOST, port))
+        print("OK: Socket binded")
     except:
         print("ERR: Socket bind failed")
         return None
+
+    serversocket.listen(5)
+
+    try:
+        while True:
+            (connection, address) = serversocket.accept()
+            clientsocket = ServerThread(connection, address)
+            clientsocket.start()
+    except KeyboardInterrupt:
+        serversocket.close()
+        print("OK: Exiting")
+        exit(0)
 
     print(port)
 
