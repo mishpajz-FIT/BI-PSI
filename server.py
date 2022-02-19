@@ -20,7 +20,7 @@ class ServerThread(threading.Thread):
             AUTHENTICATED = 3
 
         SERVER_KEY = [23019, 32037, 18789, 16443, 18189]
-        
+        CLIENT_KEY = [32037, 29295, 13603, 29533, 21952]
 
         def __init__(self, connection) -> None:
             self.connection = connection
@@ -37,6 +37,14 @@ class ServerThread(threading.Thread):
                 if len(data) > 5:
                     return False
             return True
+
+        def calculate_hash(self):
+            self.hash = 0
+            for c in self.username:
+                self.hash += ord(c)
+            self.hash *= 1000
+            self.hash %= 65536
+
 
         def authenticate(self, data) -> bool:
             if not self.check_if_length_valid(data):
@@ -60,6 +68,8 @@ class ServerThread(threading.Thread):
                 if self.keyid < 0 or self.keyid > 4:
                     self.connection.send(b"3303 KEY OUT OF RANGE\a\b")
                     return False
+                
+                self.calculate_hash()
 
                 self.connection.send(b"107 KEY REQUEST\a\b")
                 return True
