@@ -2,6 +2,7 @@
 
 from concurrent.futures import thread
 import socket
+from sqlite3 import connect
 from symtable import SymbolTable
 import sys
 import threading
@@ -26,7 +27,7 @@ class ServerThread(threading.Thread):
             self.connection = connection
             self.phase = self.AuthenticationPhase.USERNAME
 
-        def check_if_length_valid(self, data) -> bool:
+        def length_valid(self, data) -> bool:
             if self.phase == self.AuthenticationPhase.USERNAME:
                 if len(data) > 18:
                     return False
@@ -47,35 +48,55 @@ class ServerThread(threading.Thread):
 
 
         def authenticate(self, data) -> bool:
-            if not self.check_if_length_valid(data):
+            if not self.length_valid(data):
                 self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 return False
 
             if self.phase == self.AuthenticationPhase.USERNAME:
                 self.username = data
-                self.phase = self.AuthenticationPhase.KEY_ID
 
+                self.phase = self.AuthenticationPhase.KEY_ID
                 self.connection.send("107 KEY REQUEST\a\b".encode("ascii"))
                 return True
 
             elif self.phase == self.AuthenticationPhase.KEY_ID:
                 if not data.isdecimal():
-                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))    
                     return False
 
                 self.keyid = int(data)
 
                 if self.keyid < 0 or self.keyid > 4:
-                    self.connection.send("3303 KEY OUT OF RANGE\a\b".encode("ascii"))
+                    self.connection.send("303 KEY OUT OF RANGE\a\b".encode("ascii"))
                     return False
                 
                 self.calculate_hash()
 
-                self.connection.send(b"107 KEY REQUEST\a\b")
+                server_hash = self.hash + self.SERVER_KEY[self.keyid]
+                server_hash %= 65536
+                confirmation_message = f"{server_hash}\a\b"
+
+                self.phase = self.AuthenticationPhase.CONFIRMATION
+                self.connection.send(confirmation_message.encode("ascii"))
                 return True
 
-            elif self.phase == self.AuthenticationPhase.AUTHENTICATED:
+            elif self.phase == self.AuthenticationPhase.CONFIRMATION:
+                if not data.isdecimal():
+                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                    return False
                 
+                clientkey = int(data)
+                clientkey -= self.CLIENT_KEY[self.keyid]
+                if clientkey < 0:
+                    clientkey = 65536 + clientkey
+
+                if clientkey != self.hash:
+                    self.connection.send("300 LOGIN FAILED\a\b".encode("ascii"))
+                    return False
+
+                self.phase = self.AuthenticationPhase.AUTHENTICATED
+                self.connection.send("200 OK\a\b".encode("ascii"))
+                return True     
 
     def __init__(self, connection, address) -> None:
         threading.Thread.__init__(self)
@@ -83,23 +104,26 @@ class ServerThread(threading.Thread):
         self.address = address
         self.data = ""
         self.authentication = ServerThread.Authentication(connection)
+        self.active = True
         print("OK: Connected from ", address)
 
     def run(self):
-        while True:
-            self.data += self.connection.recv(100).decode("ascii")
-            while '-' in self.data:
-                new_partition = self.recv_data.partition("-")
+        while self.active:
+            self.data += self.connection.recv(1024).decode("ascii")
+            while '\a\b' in self.data:
+                new_partition = self.data.partition("\a\b")
                 new_string = new_partition[0]
                 self.data = new_partition[2]
-                print(new_string)
                 if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
-                    if not self.autentication.authenticate(new_string):
+                    if not self.authentication.authenticate(new_string):
+                        self.connection.close()
+                        self.active = False
                         break
 
-            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED and self.authentication.check_if_length_valid(self.data)):
+            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED and not self.authentication.length_valid(self.data)):
                 self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
-                break
+                self.active = False
+        self.connection.close()
 
 
         
