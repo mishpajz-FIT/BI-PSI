@@ -48,25 +48,25 @@ class ServerThread(threading.Thread):
 
         def authenticate(self, data) -> bool:
             if not self.check_if_length_valid(data):
-                self.connection.send(b"301 SYNTAX ERROR\a\b")
+                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 return False
 
             if self.phase == self.AuthenticationPhase.USERNAME:
                 self.username = data
                 self.phase = self.AuthenticationPhase.KEY_ID
 
-                self.connection.send(b"107 KEY REQUEST\a\b")
+                self.connection.send("107 KEY REQUEST\a\b".encode("ascii"))
                 return True
 
             elif self.phase == self.AuthenticationPhase.KEY_ID:
                 if not data.isdecimal():
-                    self.connection.send(b"301 SYNTAX ERROR\a\b")
+                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                     return False
 
                 self.keyid = int(data)
 
                 if self.keyid < 0 or self.keyid > 4:
-                    self.connection.send(b"3303 KEY OUT OF RANGE\a\b")
+                    self.connection.send("3303 KEY OUT OF RANGE\a\b".encode("ascii"))
                     return False
                 
                 self.calculate_hash()
@@ -98,7 +98,7 @@ class ServerThread(threading.Thread):
                         break
 
             if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED and self.authentication.check_if_length_valid(self.data)):
-                self.connection.send(b"301 SYNTAX ERROR\a\b")
+                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 break
 
 
