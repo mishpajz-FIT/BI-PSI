@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
 
-from concurrent.futures import thread
 import socket
-from sqlite3 import connect
-from symtable import SymbolTable
 import sys
 import threading
-from enum import Enum
+import enum
 
 HOST = '127.0.0.1'
 port = None
@@ -14,7 +11,8 @@ port = None
 class ServerThread(threading.Thread):
 
     class Authentication():
-        class AuthenticationPhase(Enum):
+
+        class AuthenticationPhase(enum.Enum):
             USERNAME = 0
             KEY_ID = 1
             CONFIRMATION = 2
@@ -98,6 +96,25 @@ class ServerThread(threading.Thread):
                 self.connection.send("200 OK\a\b".encode("ascii"))
                 return True     
 
+    class Movement():
+
+        class Direction(enum.Enum):
+            POSITIVE_X = 0
+            POSITIVE_Y = 1
+            NEGATIVE_X = 2
+            NEGATIVE_Y = 3
+
+        def __init__(self, connection) -> None:
+            self.connection = connection
+            self.x_y = None
+            self.direction = None
+
+        def process_message(self, data):
+            if "OK" in data:
+                data_split = data.split(" ")
+                new_x = data_split[1]
+                new_y = data_split[2]
+
     def __init__(self, connection, address) -> None:
         threading.Thread.__init__(self)
         self.connection = connection
@@ -107,25 +124,27 @@ class ServerThread(threading.Thread):
         self.active = True
         print("OK: Connected from ", address)
 
+    def handle_data(self):
+        while '\a\b' in self.data:
+            new_partition = self.data.partition("\a\b")
+            new_string = new_partition[0]
+            self.data = new_partition[2]
+            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
+                if not self.authentication.authenticate(new_string):
+                    self.connection.close()
+                    self.active = False
+                    break
+
     def run(self):
         while self.active:
             self.data += self.connection.recv(1024).decode("ascii")
-            while '\a\b' in self.data:
-                new_partition = self.data.partition("\a\b")
-                new_string = new_partition[0]
-                self.data = new_partition[2]
-                if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
-                    if not self.authentication.authenticate(new_string):
-                        self.connection.close()
-                        self.active = False
-                        break
+
+            self.handle_data(self)
 
             if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED and not self.authentication.length_valid(self.data)):
                 self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 self.active = False
         self.connection.close()
-
-
         
 def get_port() -> bool:
     if (len(sys.argv) <= 1):
@@ -175,9 +194,6 @@ def main():
     except KeyboardInterrupt:
         serversocket.close()
         print("OK: Exiting")
-        exit(0)
-
-    print(port)
 
 
 if __name__ == "__main__":
