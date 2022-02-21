@@ -94,6 +94,7 @@ class ServerThread(threading.Thread):
 
                 self.phase = self.AuthenticationPhase.AUTHENTICATED
                 self.connection.send("200 OK\a\b".encode("ascii"))
+                self.connection.send("103 TURN LEFT\a\b".encode("ascii"))
                 return True     
 
     class Movement():
@@ -106,14 +107,115 @@ class ServerThread(threading.Thread):
 
         def __init__(self, connection) -> None:
             self.connection = connection
-            self.x_y = None
+            self.x = None
+            self.y = None
             self.direction = None
+            self.picking_up_message = False
+            self.recharging = False
+            self.last_moved = False
+            self.first_move = True
 
-        def process_message(self, data):
-            if "OK" in data:
-                data_split = data.split(" ")
-                new_x = data_split[1]
-                new_y = data_split[2]
+        def move(self):
+            self.connection.send("102 MOVE\a\b".encode("ascii"))
+            self.last_moved = True
+
+        def rotate(self, left):
+            rotation_value = None
+            if left:
+                rotation_value = (self.direction.value + 1) % 4
+                self.connection.send("103 TURN LEFT\a\b".encode("ascii"))
+            else:
+                rotation_value = (self.direction.value - 1) % 4
+                self.connection.send("104 TURN RIGHT\a\b".encode("ascii"))
+            self.direction = self.Direction(rotation_value)
+            self.last_moved = False
+
+        def calculate_direction(self, direction):
+            if self.direction == direction:
+                self.move()
+            else:
+                if (direction.value - self.direction.value) == -1 or (direction.value - self.direction.value) == 3:
+                    self.rotate(False)
+                else:
+                    self.rotate(True)
+
+        def unstuck(self):
+            #TODO
+            return
+
+        def calculate_move(self):
+            if self.x != 0:
+                if self.x > 0:
+                    self.calculate_direction(self.Direction.NEGATIVE_X)
+                elif self.x < 0:
+                    self.calculate_direction(self.Direction.POSITIVE_X)
+            elif self.y != 0:
+                if self.y > 0:
+                    self.calculate_direction(self.Direction.NEGATIVE_Y)
+                elif self.y < 0:
+                    self.calculate_direction(self.Direction.POSITIVE_Y)
+
+
+        def get_message(self):
+            self.picking_up_message = True
+            self.connection.send("105 GET MESSAGE\a\b".encode("ascii"))
+
+        def verify_length(self, data):
+            if self.picking_up_message:
+                if len(data) <= 98:
+                    return True
+            else:
+                if len(data) <= 10:
+                    return True
+            return False
+
+        def process_message(self, data) -> bool:
+            
+            if not self.verify_length(data):
+                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                return False
+
+            if self.picking_up_message:
+                self.connection.send("106 LOGOUT\a\b".encode("ascii"))
+                return False
+            else:
+                if "OK" in data:
+                    data_split = data.split(" ")
+                    new_x = int(data_split[1])
+                    new_y = int(data_split[2])
+
+                    if new_x == 0 and new_y == 0:
+                        self.get_message()
+
+                    if (self.last_moved and new_x == self.x and new_y == self.y):
+                        self.unstuck()
+                    elif not self.first_move:
+                        if (new_x > self.x):
+                            self.direction = self.Direction.POSITIVE_X
+                        elif (new_x < self.x):
+                            self.direction = self.Direction.NEGATIVE_X
+                        elif (new_y > self.y):
+                            self.direction = self.Direction.POSITIVE_Y
+                        elif (new_y < self.y):
+                            self.direction = self.Direction.NEGATIVE_Y
+
+                    self.x = new_x
+                    self.y = new_y
+
+                    if self.first_move:
+                        self.first_move = False
+                        self.move()
+                    else:
+                        self.calculate_move()
+
+                elif "RECHARGING" in data:
+                    self.recharging = True
+                elif "FULL POWER" in data:
+                    self.recharging = False
+
+            return True
+                
+
 
     def __init__(self, connection, address) -> None:
         threading.Thread.__init__(self)
@@ -121,29 +223,43 @@ class ServerThread(threading.Thread):
         self.address = address
         self.data = ""
         self.authentication = ServerThread.Authentication(connection)
+        self.movement = ServerThread.Movement(connection)
         self.active = True
         print("OK: Connected from ", address)
 
-    def handle_data(self):
+    def syntax_error(self):
+        self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+        self.active = False
+
+    def handle_data(self) -> bool:
         while '\a\b' in self.data:
             new_partition = self.data.partition("\a\b")
             new_string = new_partition[0]
             self.data = new_partition[2]
             if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
                 if not self.authentication.authenticate(new_string):
-                    self.connection.close()
                     self.active = False
-                    break
+                    return False
+            else:
+                if not self.movement.process_message(new_string):
+                    self.active = False
+                    return False
+        return True
 
     def run(self):
         while self.active:
             self.data += self.connection.recv(1024).decode("ascii")
 
-            self.handle_data(self)
+            if not self.handle_data():
+                break
 
             if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED and not self.authentication.length_valid(self.data)):
-                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
-                self.active = False
+                self.syntax_error()
+            elif not self.movement.picking_up_message and len(self.data) > 10:
+                self.syntax_error()
+            elif len(self.data) > 98:
+                self.syntax_error()
+
         self.connection.close()
         
 def get_port() -> bool:
