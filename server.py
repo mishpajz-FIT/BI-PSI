@@ -26,14 +26,18 @@ class ServerThread(threading.Thread):
             self.phase = self.AuthenticationPhase.USERNAME
 
         def length_valid(self, data) -> bool:
+            prefix_size = 0
+            if len(data) != 0 and data[-1] == "\a":
+                prefix_size += 1
+
             if self.phase == self.AuthenticationPhase.USERNAME:
-                if len(data) > 18:
+                if len(data) > 18 + prefix_size:
                     return False
             elif self.phase == self.AuthenticationPhase.KEY_ID:
-                if len(data) > 3:
+                if len(data) > 3 + prefix_size:
                     return False
             elif self.phase == self.AuthenticationPhase.CONFIRMATION:
-                if len(data) > 5:
+                if len(data) > 5 + prefix_size:
                     return False
             return True
 
@@ -321,8 +325,13 @@ class ServerThread(threading.Thread):
                     self.syntax_error()
                     self.connection.close()
             else:
-                if (not self.movement.picking_up_message and len(self.data) > 10) or len(self.data) > 98:
+                prefix_size = 0
+                if len(self.data) != 0 and self.data[-1] == "\a":
+                    prefix_size += 1
+
+                if (not self.movement.picking_up_message and len(self.data) > 10 + prefix_size) or len(self.data) > 98 + prefix_size:
                     self.syntax_error()
+
                     self.connection.close()
         
 def get_port() -> bool:
