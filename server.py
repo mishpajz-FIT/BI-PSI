@@ -44,8 +44,8 @@ class ServerThread(threading.Thread):
             self.hash *= 1000
             self.hash %= 65536
 
-
         def authenticate(self, data) -> bool:
+
             if not self.length_valid(data):
                 self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 return False
@@ -59,7 +59,7 @@ class ServerThread(threading.Thread):
 
             elif self.phase == self.AuthenticationPhase.KEY_ID:
                 if not data.isdecimal():
-                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))    
+                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))  
                     return False
 
                 self.keyid = int(data)
@@ -200,12 +200,8 @@ class ServerThread(threading.Thread):
                 return False
 
             if "OK" in data and not self.picking_up_message:
-                if self.recharging:
-                    self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
-                    return False
 
                 data_split = data.split(" ")
-
 
                 if data_split[0] != "OK" or not self.verify_digit(data_split[1]) or not self.verify_digit(data_split[2]) or len(data_split) != 3:
                     self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
@@ -213,7 +209,7 @@ class ServerThread(threading.Thread):
                 new_x = int(data_split[1])
                 new_y = int(data_split[2])
 
-                if self.last_moved and new_x == self.x and new_y == self.y and self.unstuck_moves_left <= 0:
+                if (self.last_moved and (new_x == self.x and new_y == self.y)) and self.unstuck_moves_left <= 0:
                     self.unstuck()
                 elif not self.first_move:
                     if (new_x > self.x):
@@ -239,31 +235,10 @@ class ServerThread(threading.Thread):
                         self.calculate_move()
                     else:
                         self.unstuck_moves_left -= 1
-
-            elif data == "RECHARGING":
-                if self.recharging:
-                    self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
-                    return False
-                    
-                self.connection.settimeout(5)
-                self.unstuck_moves_left = 0
-                self.recharging = True
-            elif data == "FULL POWER":
-                if not self.recharging:
-                    self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
-                    return False
-
-                self.connection.settimeout(1)
-                self.recharging = False
-                self.calculate_move()
             else:
                 if self.picking_up_message:
-                    if self.recharging:
-                        self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
-                        return False
-                    else:
-                        self.connection.send("106 LOGOUT\a\b".encode("ascii"))
-                        return False
+                    self.connection.send("106 LOGOUT\a\b".encode("ascii"))
+                    return False
 
                 self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 return False
@@ -277,7 +252,8 @@ class ServerThread(threading.Thread):
         self.authentication = ServerThread.Authentication(connection)
         self.movement = ServerThread.Movement(connection)
         self.active = True
-        
+        self.recharging = False
+
         self.connection.settimeout(1)
 
         print("OK: Connected from " + address[0] + ":" + str(address[1]))
@@ -286,11 +262,39 @@ class ServerThread(threading.Thread):
         self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
         self.active = False
 
+    def logical_error(self):
+        self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
+        self.active = False
+
+    def recharge(self):
+        if not self.recharging:
+            self.connection.settimeout(5)
+            self.recharging = True
+        else:
+            self.connection.settimeout(1)
+            self.recharging = False
+
     def handle_data(self) -> bool:
         while '\a\b' in self.data:
             new_partition = self.data.partition("\a\b")
             new_string = new_partition[0]
             self.data = new_partition[2]
+
+            if new_string == "RECHARGING":
+                if self.recharging:
+                    self.logical_error()
+                    return False
+                self.recharge()
+                continue
+            else:
+                if self.recharging:
+                    if new_string == "FULL POWER":
+                        self.recharge()
+                        continue
+                    else:
+                        self.logical_error()
+                        return False
+
             if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
                 if not self.authentication.authenticate(new_string):
                     self.active = False
