@@ -187,6 +187,12 @@ class ServerThread(threading.Thread):
                     return True
             return False
 
+        def verify_digit(self, digit) -> bool:
+            if digit.startswith("-"):
+                return digit[1:].isdigit()
+            else:
+                return digit.isdigit()
+
         def process_message(self, data) -> bool:
             
             if not self.verify_length(data):
@@ -199,6 +205,11 @@ class ServerThread(threading.Thread):
                     return False
 
                 data_split = data.split(" ")
+
+
+                if data_split[0] != "OK" or not self.verify_digit(data_split[1]) or not self.verify_digit(data_split[2]) or len(data_split) != 3:
+                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                    return False
                 new_x = int(data_split[1])
                 new_y = int(data_split[2])
 
@@ -219,7 +230,10 @@ class ServerThread(threading.Thread):
 
                 if self.first_move:
                     self.first_move = False
-                    self.move()
+                    if self.x == 0 and self.y == 0:
+                        self.get_message()
+                    else:
+                        self.move()
                 else:
                     if self.unstuck_moves_left <= 0:
                         self.calculate_move()
@@ -301,11 +315,11 @@ class ServerThread(threading.Thread):
             if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
                 if not self.authentication.length_valid(self.data):
                     self.syntax_error()
+                    self.connection.close()
             else:
-                if not self.movement.picking_up_message and len(self.data) > 10:
+                if (not self.movement.picking_up_message and len(self.data) > 10) or len(self.data) > 98:
                     self.syntax_error()
-                elif len(self.data) > 98:
-                    self.syntax_error()
+                    self.connection.close()
         
 def get_port() -> bool:
     if (len(sys.argv) <= 1):
