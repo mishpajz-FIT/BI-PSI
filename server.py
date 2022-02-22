@@ -123,16 +123,19 @@ class ServerThread(threading.Thread):
         def rotate(self, left):
             rotation_value = None
             if left:
-                rotation_value = (self.direction.value + 1) % 4
+                if self.direction:
+                    rotation_value = (self.direction.value + 1) % 4
                 self.connection.send("103 TURN LEFT\a\b".encode("ascii"))
             else:
-                rotation_value = (self.direction.value - 1) % 4
+                if self.direction:
+                    rotation_value = (self.direction.value - 1) % 4
                 self.connection.send("104 TURN RIGHT\a\b".encode("ascii"))
-            self.direction = self.Direction(rotation_value)
+            if self.direction:
+                self.direction = self.Direction(rotation_value)
             self.last_moved = False
 
         def calculate_direction(self, direction):
-            if self.direction == direction:
+            if not self.direction or self.direction == direction:
                 self.move()
             else:
                 if (direction.value - self.direction.value) == -1 or (direction.value - self.direction.value) == 3:
@@ -141,8 +144,20 @@ class ServerThread(threading.Thread):
                     self.rotate(True)
 
         def unstuck(self):
-            #TODO
-            return
+            left = True
+            if self.direction:
+                if self.x > 0:
+                    if self.y < 0:
+                        left = False
+                else:
+                    if self.y > 0:
+                        left = False
+
+            self.rotate(left)
+            self.move()
+            self.rotate(not left)
+            self.move()
+            self.unstuck_moves_left = 4
 
         def get_message(self):
             self.picking_up_message = True
@@ -234,7 +249,7 @@ class ServerThread(threading.Thread):
                         return False
                     else:
                         self.connection.send("106 LOGOUT\a\b".encode("ascii"))
-                        return True
+                        return False
 
                 self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 return False
@@ -251,7 +266,7 @@ class ServerThread(threading.Thread):
         
         self.connection.settimeout(1)
 
-        print("OK: Connected from ", address)
+        print("OK: Connected from " + address[0] + ":" + str(address[1]))
 
     def syntax_error(self):
         self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
@@ -274,10 +289,14 @@ class ServerThread(threading.Thread):
 
     def run(self):
         while self.active:
-            self.data += self.connection.recv(1024).decode("ascii")
+            try:
+                self.data += self.connection.recv(1024).decode("ascii")
+            except:
+                self.active = False
+                self.connection.close()
 
             if not self.handle_data():
-                break
+                self.connection.close()
 
             if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
                 if not self.authentication.length_valid(self.data):
@@ -287,8 +306,6 @@ class ServerThread(threading.Thread):
                     self.syntax_error()
                 elif len(self.data) > 98:
                     self.syntax_error()
-
-        self.connection.close()
         
 def get_port() -> bool:
     if (len(sys.argv) <= 1):
