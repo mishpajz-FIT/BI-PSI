@@ -114,6 +114,7 @@ class ServerThread(threading.Thread):
             self.recharging = False
             self.last_moved = False
             self.first_move = True
+            self.unstuck_moves_left = 0
 
         def move(self):
             self.connection.send("102 MOVE\a\b".encode("ascii"))
@@ -143,6 +144,10 @@ class ServerThread(threading.Thread):
             #TODO
             return
 
+        def get_message(self):
+            self.picking_up_message = True
+            self.connection.send("105 GET MESSAGE\a\b".encode("ascii"))
+
         def calculate_move(self):
             if self.x != 0:
                 if self.x > 0:
@@ -154,11 +159,9 @@ class ServerThread(threading.Thread):
                     self.calculate_direction(self.Direction.NEGATIVE_Y)
                 elif self.y < 0:
                     self.calculate_direction(self.Direction.POSITIVE_Y)
-
-
-        def get_message(self):
-            self.picking_up_message = True
-            self.connection.send("105 GET MESSAGE\a\b".encode("ascii"))
+            else:
+                self.last_moved = False
+                self.get_message()
 
         def verify_length(self, data):
             if self.picking_up_message:
@@ -175,47 +178,67 @@ class ServerThread(threading.Thread):
                 self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
                 return False
 
-            if self.picking_up_message:
-                self.connection.send("106 LOGOUT\a\b".encode("ascii"))
-                return False
-            else:
-                if "OK" in data:
-                    data_split = data.split(" ")
-                    new_x = int(data_split[1])
-                    new_y = int(data_split[2])
+            if "OK" in data and not self.picking_up_message:
+                if self.recharging:
+                    self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
+                    return False
 
-                    if new_x == 0 and new_y == 0:
-                        self.get_message()
+                data_split = data.split(" ")
+                new_x = int(data_split[1])
+                new_y = int(data_split[2])
 
-                    if (self.last_moved and new_x == self.x and new_y == self.y):
-                        self.unstuck()
-                    elif not self.first_move:
-                        if (new_x > self.x):
-                            self.direction = self.Direction.POSITIVE_X
-                        elif (new_x < self.x):
-                            self.direction = self.Direction.NEGATIVE_X
-                        elif (new_y > self.y):
-                            self.direction = self.Direction.POSITIVE_Y
-                        elif (new_y < self.y):
-                            self.direction = self.Direction.NEGATIVE_Y
+                if self.last_moved and new_x == self.x and new_y == self.y and self.unstuck_moves_left <= 0:
+                    self.unstuck()
+                elif not self.first_move:
+                    if (new_x > self.x):
+                        self.direction = self.Direction.POSITIVE_X
+                    elif (new_x < self.x):
+                        self.direction = self.Direction.NEGATIVE_X
+                    elif (new_y > self.y):
+                        self.direction = self.Direction.POSITIVE_Y
+                    elif (new_y < self.y):
+                        self.direction = self.Direction.NEGATIVE_Y
 
-                    self.x = new_x
-                    self.y = new_y
+                self.x = new_x
+                self.y = new_y
 
-                    if self.first_move:
-                        self.first_move = False
-                        self.move()
-                    else:
+                if self.first_move:
+                    self.first_move = False
+                    self.move()
+                else:
+                    if self.unstuck_moves_left <= 0:
                         self.calculate_move()
+                    else:
+                        self.unstuck_moves_left -= 1
 
-                elif "RECHARGING" in data:
-                    self.recharging = True
-                elif "FULL POWER" in data:
-                    self.recharging = False
+            elif data == "RECHARGING":
+                if self.recharging:
+                    self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
+                    return False
+                    
+                self.connection.settimeout(5)
+                self.unstuck_moves_left = 0
+                self.recharging = True
+            elif data == "FULL POWER":
+                if not self.recharging:
+                    self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
+                    return False
 
+                self.connection.settimeout(1)
+                self.recharging = False
+                self.calculate_move()
+            else:
+                if self.picking_up_message:
+                    if self.recharging:
+                        self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
+                        return False
+                    else:
+                        self.connection.send("106 LOGOUT\a\b".encode("ascii"))
+                        return True
+
+                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                return False
             return True
-                
-
 
     def __init__(self, connection, address) -> None:
         threading.Thread.__init__(self)
@@ -225,6 +248,9 @@ class ServerThread(threading.Thread):
         self.authentication = ServerThread.Authentication(connection)
         self.movement = ServerThread.Movement(connection)
         self.active = True
+        
+        self.connection.settimeout(1)
+
         print("OK: Connected from ", address)
 
     def syntax_error(self):
@@ -253,12 +279,14 @@ class ServerThread(threading.Thread):
             if not self.handle_data():
                 break
 
-            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED and not self.authentication.length_valid(self.data)):
-                self.syntax_error()
-            elif not self.movement.picking_up_message and len(self.data) > 10:
-                self.syntax_error()
-            elif len(self.data) > 98:
-                self.syntax_error()
+            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
+                if not self.authentication.length_valid(self.data):
+                    self.syntax_error()
+            else:
+                if not self.movement.picking_up_message and len(self.data) > 10:
+                    self.syntax_error()
+                elif len(self.data) > 98:
+                    self.syntax_error()
 
         self.connection.close()
         
