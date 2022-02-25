@@ -44,6 +44,17 @@ class ServerThread(threading.Thread):
             if len(data) != 0 and data[-1] == "\a":
                 prefix_size += 1
 
+            # Check for halt message
+            recharging_check_string = "RECHARGING\a\b"
+            recharging_check_string_trucated = recharging_check_string[0:len(data)]
+
+            if data.startswith(recharging_check_string_trucated):
+                if len(data) > 10 + prefix_size:
+                    return False
+                else:
+                    return True
+
+            # Check if message length is expected in authentication phase
             if self.phase == self.AuthenticationPhase.USERNAME:
                 if len(data) > 18 + prefix_size:
                     return False
@@ -203,41 +214,74 @@ class ServerThread(threading.Thread):
                 self.last_moved = False
                 self.get_message()
 
+        ## Check if message length is valid before processing it
+        #
+        #  Calculates whether the message fits the expected length.
+        #
+        #  @param self
+        #  @param data Received message
+        #  
+        #  @returns bool Valid length
+        #
         def verify_length(self, data):
+            # Check if contains part of message separation characters
+            prefix_size = 0
+            if len(data) != 0 and data[-1] == "\a":
+                prefix_size += 1
+
+            # Check if message length is expected
             if self.picking_up_message:
-                if len(data) <= 98:
+                if len(data) <= 98 + prefix_size:
                     return True
             else:
-                if len(data) <= 10:
+                if len(data) <= 10 + prefix_size:
                     return True
             return False
 
+        ## Check if string contains positive or negative integer
+        #
+        #  @param self
+        #  @param digit String containing digit
+        #
+        #  @returns bool Does string contain valid integer
+        #
         def verify_digit(self, digit) -> bool:
             if digit.startswith("-"):
                 return digit[1:].isdigit()
             else:
                 return digit.isdigit()
 
+        ## Process received movement message
+        #
+        #  @param self
+        #  @param data Received message
+        #
+        #  @returns bool If true movement is valid, else should terminate connection (or goal has been achieved and should terminate)
         def process_message(self, data) -> bool:
             global MESSAGES
 
+            # Check for correct length
             if not self.verify_length(data):
                 self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
                 return False
 
+            # Perform action based on received message
             if "OK" in data and not self.picking_up_message:
 
                 data_split = data.split(" ")
 
+                # Check for correct syntax
                 if data_split[0] != "OK" or not self.verify_digit(data_split[1]) or not self.verify_digit(data_split[2]) or len(data_split) != 3:
                     self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
                     return False
                 new_x = int(data_split[1])
                 new_y = int(data_split[2])
 
-                if (self.last_moved and (new_x == self.x and new_y == self.y)) and self.unstuck_moves_left <= 0:
-                    self.unstuck()
-                elif not self.first_move:
+                # Based on current and last position verify if stuck and calculate direction  
+                if not self.first_move:
+                    if (self.last_moved and (new_x == self.x and new_y == self.y)) and self.unstuck_moves_left <= 0:
+                        self.unstuck()
+
                     if (new_x > self.x):
                         self.direction = self.Direction.POSITIVE_X
                     elif (new_x < self.x):
@@ -344,18 +388,14 @@ class ServerThread(threading.Thread):
             if not self.handle_data():
                 self.connection.close()
 
-            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED):
-                if not self.authentication.length_valid(self.data):
+            ## Message length checking optimalization
+            if (self.authentication.phase != self.authentication.AuthenticationPhase.AUTHENTICATED) and not self.recharging:
+                if not self.authentication.verify_length(self.data):
                     self.syntax_error()
                     self.connection.close()
             else:
-                prefix_size = 0
-                if len(self.data) != 0 and self.data[-1] == "\a":
-                    prefix_size += 1
-
-                if (not self.movement.picking_up_message and len(self.data) > 10 + prefix_size) or len(self.data) > 98 + prefix_size:
+                if not self.movement.verify_length(self.data):
                     self.syntax_error()
-
                     self.connection.close()
         
 def get_port() -> bool:
