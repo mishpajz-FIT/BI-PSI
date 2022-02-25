@@ -398,12 +398,15 @@ def main():
 
     serversocket.listen(5)
 
+    server_threads = []
+
     try:
         while True:
             (connection, address) = serversocket.accept()
             clientsocket = ServerThread(connection, address)
+            server_threads.append(clientsocket)
             clientsocket.start()
-    except KeyboardInterrupt:
+    except:
         serversocket.close()
         print("OK: Exiting")
 
