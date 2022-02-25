@@ -8,6 +8,23 @@ import enum
 HOST = '127.0.0.1'
 port = None
 
+SERVER_KEY = [23019, 32037, 18789, 16443, 18189]
+CLIENT_KEY = [32037, 29295, 13603, 29533, 21952]
+
+MESSAGES = {
+    "SERVER_SYNTAX_ERROR": "301 SYNTAX ERROR\a\b".encode("ascii"),
+    "SERVER_LOGIC_ERROR": "302 LOGIC ERROR\a\b".encode("ascii"),
+    "SERVER_LOGOUT": "106 LOGOUT\a\b".encode("ascii"),
+    "SERVER_KEY_REQUEST": "107 KEY REQUEST\a\b".encode("ascii"),
+    "SERVER_LOGIN_FAILED": "300 LOGIN FAILED\a\b".encode("ascii"),
+    "SERVER_KEY_OUT_OF_RANGE_ERROR": "303 KEY OUT OF RANGE\a\b".encode("ascii"),
+    "SERVER_OK": "200 OK\a\b".encode("ascii"),
+    "SERVER_MOVE": "102 MOVE\a\b".encode("ascii"),
+    "SERVER_TURN_LEFT": "103 TURN LEFT\a\b".encode("ascii"),
+    "SERVER_TURN_RIGHT": "104 TURN RIGHT\a\b".encode("ascii"),
+    "SERVER_PICK_UP": "105 GET MESSAGE\a\b".encode("ascii")
+};
+
 class ServerThread(threading.Thread):
 
     class Authentication():
@@ -17,9 +34,6 @@ class ServerThread(threading.Thread):
             KEY_ID = 1
             CONFIRMATION = 2
             AUTHENTICATED = 3
-
-        SERVER_KEY = [23019, 32037, 18789, 16443, 18189]
-        CLIENT_KEY = [32037, 29295, 13603, 29533, 21952]
 
         def __init__(self, connection) -> None:
             self.connection = connection
@@ -50,31 +64,35 @@ class ServerThread(threading.Thread):
 
         def authenticate(self, data) -> bool:
 
+            global SERVER_KEY
+            global CLIENT_KEY
+            global MESSAGES
+
             if not self.length_valid(data):
-                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
                 return False
 
             if self.phase == self.AuthenticationPhase.USERNAME:
                 self.username = data
 
                 self.phase = self.AuthenticationPhase.KEY_ID
-                self.connection.send("107 KEY REQUEST\a\b".encode("ascii"))
+                self.connection.send(MESSAGES["SERVER_KEY_REQUEST"])
                 return True
 
             elif self.phase == self.AuthenticationPhase.KEY_ID:
                 if not data.isdecimal():
-                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))  
+                    self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])  
                     return False
 
                 self.keyid = int(data)
 
                 if self.keyid < 0 or self.keyid > 4:
-                    self.connection.send("303 KEY OUT OF RANGE\a\b".encode("ascii"))
+                    self.connection.send(MESSAGES["SERVER_KEY_OUT_OF_RANGE_ERROR"])
                     return False
                 
                 self.calculate_hash()
 
-                server_hash = self.hash + self.SERVER_KEY[self.keyid]
+                server_hash = self.hash + SERVER_KEY[self.keyid]
                 server_hash %= 65536
                 confirmation_message = f"{server_hash}\a\b"
 
@@ -84,21 +102,21 @@ class ServerThread(threading.Thread):
 
             elif self.phase == self.AuthenticationPhase.CONFIRMATION:
                 if not data.isdecimal():
-                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                    self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
                     return False
                 
                 clientkey = int(data)
-                clientkey -= self.CLIENT_KEY[self.keyid]
+                clientkey -= CLIENT_KEY[self.keyid]
                 if clientkey < 0:
                     clientkey = 65536 + clientkey
 
                 if clientkey != self.hash:
-                    self.connection.send("300 LOGIN FAILED\a\b".encode("ascii"))
+                    self.connection.send(MESSAGES["SERVER_LOGIN_FAILED"])
                     return False
 
                 self.phase = self.AuthenticationPhase.AUTHENTICATED
-                self.connection.send("200 OK\a\b".encode("ascii"))
-                self.connection.send("103 TURN LEFT\a\b".encode("ascii"))
+                self.connection.send(MESSAGES["SERVER_OK"])
+                self.connection.send(MESSAGES["SERVER_TURN_LEFT"])
                 return True     
 
     class Movement():
@@ -121,19 +139,21 @@ class ServerThread(threading.Thread):
             self.unstuck_moves_left = 0
 
         def move(self):
-            self.connection.send("102 MOVE\a\b".encode("ascii"))
+            global MESSAGES
+            self.connection.send(MESSAGES["SERVER_MOVE"])
             self.last_moved = True
 
         def rotate(self, left):
+            global MESSAGES
             rotation_value = None
             if left:
                 if self.direction:
                     rotation_value = (self.direction.value + 1) % 4
-                self.connection.send("103 TURN LEFT\a\b".encode("ascii"))
+                self.connection.send(MESSAGES["SERVER_TURN_LEFT"])
             else:
                 if self.direction:
                     rotation_value = (self.direction.value - 1) % 4
-                self.connection.send("104 TURN RIGHT\a\b".encode("ascii"))
+                self.connection.send(MESSAGES["SERVER_TURN_RIGHT"])
             if self.direction:
                 self.direction = self.Direction(rotation_value)
             self.last_moved = False
@@ -164,8 +184,9 @@ class ServerThread(threading.Thread):
             self.unstuck_moves_left = 4
 
         def get_message(self):
+            global MESSAGES
             self.picking_up_message = True
-            self.connection.send("105 GET MESSAGE\a\b".encode("ascii"))
+            self.connection.send(MESSAGES["SERVER_PICK_UP"])
 
         def calculate_move(self):
             if self.x != 0:
@@ -198,9 +219,10 @@ class ServerThread(threading.Thread):
                 return digit.isdigit()
 
         def process_message(self, data) -> bool:
-            
+            global MESSAGES
+
             if not self.verify_length(data):
-                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
                 return False
 
             if "OK" in data and not self.picking_up_message:
@@ -208,7 +230,7 @@ class ServerThread(threading.Thread):
                 data_split = data.split(" ")
 
                 if data_split[0] != "OK" or not self.verify_digit(data_split[1]) or not self.verify_digit(data_split[2]) or len(data_split) != 3:
-                    self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                    self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
                     return False
                 new_x = int(data_split[1])
                 new_y = int(data_split[2])
@@ -241,10 +263,10 @@ class ServerThread(threading.Thread):
                         self.unstuck_moves_left -= 1
             else:
                 if self.picking_up_message:
-                    self.connection.send("106 LOGOUT\a\b".encode("ascii"))
+                    self.connection.send(MESSAGES["SERVER_LOGOUT"])
                     return False
 
-                self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+                self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
                 return False
             return True
 
@@ -263,11 +285,13 @@ class ServerThread(threading.Thread):
         print("OK: Connected from " + address[0] + ":" + str(address[1]))
 
     def syntax_error(self):
-        self.connection.send("301 SYNTAX ERROR\a\b".encode("ascii"))
+        global MESSAGES
+        self.connection.send(MESSAGES["SERVER_SYNTAX_ERROR"])
         self.active = False
 
     def logical_error(self):
-        self.connection.send("302 LOGIC ERROR\a\b".encode("ascii"))
+        global MESSAGES
+        self.connection.send(MESSAGES["SERVER_LOGIC_ERROR"])
         self.active = False
 
     def recharge(self):
