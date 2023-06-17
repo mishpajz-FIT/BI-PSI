@@ -1,8 +1,8 @@
 # BI-PSI
 
-Computer networks course at FIT CTU.
+This repository was created as a part of my 'Computer networks' course at FIT CTU.
 
-The repository contains code for homework task.
+The repository contains code for a semestral task.
 
 ## Task assignment
 
